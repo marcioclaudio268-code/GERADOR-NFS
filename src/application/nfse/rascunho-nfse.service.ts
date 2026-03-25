@@ -50,6 +50,14 @@ const DATA_KEYS_TO_DROP = new Set([
   "updatedAt",
 ]);
 
+function isDecimalLike(value: unknown): value is { toNumber: () => number } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { toNumber?: unknown }).toNumber === "function"
+  );
+}
+
 function stripNullish<T>(value: T): T {
   if (value === null || value === undefined) {
     return value;
@@ -57,6 +65,10 @@ function stripNullish<T>(value: T): T {
 
   if (value instanceof Date) {
     return value;
+  }
+
+  if (isDecimalLike(value)) {
+    return value.toNumber() as T;
   }
 
   if (Array.isArray(value)) {
@@ -108,6 +120,10 @@ function mergeDefined<T extends Record<string, unknown>>(
 function asNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") {
     return null;
+  }
+
+  if (isDecimalLike(value)) {
+    return value.toNumber();
   }
 
   const parsed = typeof value === "number" ? value : Number(value);
@@ -269,7 +285,6 @@ function buildPreviewFromDraft(
     aliquotaAplicada === null ? undefined : round2((baseCalculo * aliquotaAplicada) / 100);
 
   const valorLiquidoNfse = round2(baseCalculo - (valorIssqn ?? 0));
-  const valorTotalNfse = valorLiquidoNfse;
 
   const preview: NfsePreviaNfse = NfsePreviaCalculadaSchema.parse(
     stripNullish({
@@ -278,7 +293,8 @@ function buildPreviewFromDraft(
       aliquotaAplicada: aliquotaAplicada ?? undefined,
       valorIssqn,
       valorLiquidoNfse,
-      valorTotalNfse,
+      // Campo mantido opcional no MVP; nao forcar sem regra final fechada.
+      valorTotalNfse: undefined,
       situacaoTributaria: legacyPreviewFields?.situacaoTributaria ?? undefined,
       pisCofinsCsllSituacao: legacyPreviewFields?.pisCofinsCsllSituacao ?? undefined,
       snapshotJson: buildPreviewSnapshot(
@@ -288,7 +304,7 @@ function buildPreviewFromDraft(
           aliquotaAplicada: aliquotaAplicada ?? undefined,
           valorIssqn,
           valorLiquidoNfse,
-          valorTotalNfse,
+          valorTotalNfse: undefined,
         }),
       ),
     }),
@@ -324,14 +340,15 @@ export class NfseRascunhoService {
         })
       : null;
 
+    const workflowStatus: WorkflowStatus = existingDraft
+      ? workflowStatusSchema.parse(existingDraft.workflowStatus)
+      : "RASCUNHO";
+
     if (existingDraft) {
-      assertNfseDraftEditable(existingDraft.workflowStatus as WorkflowStatus);
+      assertNfseDraftEditable(workflowStatus);
     }
 
     const currentDraft = mapDraftRowToCanonicalDraft(existingDraft ?? ({} as ExistingDraftRow));
-    const workflowStatus = (
-      existingDraft?.workflowStatus ?? "RASCUNHO"
-    ) as WorkflowStatus;
 
     const draft = stripNullish(
       mergeDefined<Record<string, unknown>>(currentDraft, input, prestador, {
@@ -379,7 +396,6 @@ export class NfseRascunhoService {
           aliquotaAplicada: preview.aliquotaAplicada,
           valorIssqn: preview.valorIssqn,
           valorLiquidoNfse: preview.valorLiquidoNfse,
-          valorTotalNfse: preview.valorTotalNfse,
           situacaoTributaria: preview.situacaoTributaria,
           pisCofinsCsllSituacao: preview.pisCofinsCsllSituacao,
           snapshotJson: preview.snapshotJson,
@@ -439,7 +455,7 @@ export class NfseRascunhoService {
       rascunhoId: rascunho.id,
       workflowStatus,
       draft,
-      previewVersion: latestPreview?.versao ?? 1,
+      previewVersion: latestPreview?.versao ?? 0,
       preview,
     };
   }
@@ -474,4 +490,3 @@ export async function buscarRascunhoNfseAction(args: {
 
   return service.buscar(args.rascunhoId);
 }
-
