@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { assertNfseDraftEditable } from "../../domain/nfse/editability";
 import type { WorkflowStatus } from "../../domain/nfse/status";
+import { assertWorkflowTransition } from "../../domain/nfse/transitions";
 import {
   prestadorSnapshotSchema,
   workflowStatusSchema,
@@ -19,6 +20,13 @@ export type NfsePreviaNfse = z.infer<typeof NfsePreviaCalculadaSchema>;
 
 export type RascunhoNfseCanonico = RascunhoNfseInput & PrestadorNfseSnapshot & {
   workflowStatus: WorkflowStatus;
+  preValidadoAt?: Date | null;
+  previaGeradaAt?: Date | null;
+  aguardandoAprovacaoAt?: Date | null;
+  aprovadoClienteAt?: Date | null;
+  rejeitadoAt?: Date | null;
+  canceladoAt?: Date | null;
+  observacaoValidacaoCliente?: string | null;
 };
 
 export type RascunhoNfseResultado = {
@@ -39,6 +47,19 @@ export type SalvarRascunhoNfseArgs = {
   input: RascunhoNfseInput;
   prestador: PrestadorNfseSnapshot;
 };
+
+export type ValidacaoClienteRascunhoNfseArgs = {
+  rascunhoId: string;
+  observacaoValidacaoCliente?: string;
+};
+
+const validacaoReprovacaoSchema = z.object({
+  observacaoValidacaoCliente: z
+    .string()
+    .trim()
+    .min(1, "Informe uma observacao para a reprovação.")
+    .max(2000),
+});
 
 type ExistingDraftRow = Awaited<
   ReturnType<PrismaRascunhoNfseClient["nfseRascunho"]["findUnique"]>
@@ -256,6 +277,49 @@ function buildDraftPersistencePayload(
   return persistencePayload;
 }
 
+function buildWorkflowSubmissionPayload(
+  currentStatus: WorkflowStatus,
+  now: Date,
+): Pick<
+  RascunhoNfseCanonico,
+  | "workflowStatus"
+  | "preValidadoAt"
+  | "previaGeradaAt"
+  | "aguardandoAprovacaoAt"
+  | "aprovadoClienteAt"
+  | "rejeitadoAt"
+  | "enviadoEmissaoAt"
+  | "autorizadoAt"
+  | "canceladoAt"
+  | "observacaoValidacaoCliente"
+> {
+  if (currentStatus === "RASCUNHO") {
+    assertWorkflowTransition("RASCUNHO", "PRE_VALIDACAO");
+    assertWorkflowTransition("PRE_VALIDACAO", "PREVIA_GERADA");
+    assertWorkflowTransition("PREVIA_GERADA", "AGUARDANDO_APROVACAO_CLIENTE");
+  } else if (currentStatus === "PRE_VALIDACAO") {
+    assertWorkflowTransition("PRE_VALIDACAO", "PREVIA_GERADA");
+    assertWorkflowTransition("PREVIA_GERADA", "AGUARDANDO_APROVACAO_CLIENTE");
+  } else if (currentStatus === "REJEITADA") {
+    assertWorkflowTransition("REJEITADA", "PRE_VALIDACAO");
+    assertWorkflowTransition("PRE_VALIDACAO", "PREVIA_GERADA");
+    assertWorkflowTransition("PREVIA_GERADA", "AGUARDANDO_APROVACAO_CLIENTE");
+  }
+
+  return {
+    workflowStatus: "AGUARDANDO_APROVACAO_CLIENTE",
+    preValidadoAt: now,
+    previaGeradaAt: now,
+    aguardandoAprovacaoAt: now,
+    aprovadoClienteAt: null,
+    rejeitadoAt: null,
+    enviadoEmissaoAt: null,
+    autorizadoAt: null,
+    canceladoAt: null,
+    observacaoValidacaoCliente: null,
+  };
+}
+
 function buildPreviewFromDraft(
   draft: RascunhoNfseCanonico,
   legacyPreviewFields?: {
@@ -340,20 +404,20 @@ export class NfseRascunhoService {
         })
       : null;
 
-    const workflowStatus: WorkflowStatus = existingDraft
+    const currentWorkflowStatus: WorkflowStatus = existingDraft
       ? workflowStatusSchema.parse(existingDraft.workflowStatus)
       : "RASCUNHO";
 
     if (existingDraft) {
-      assertNfseDraftEditable(workflowStatus);
+      assertNfseDraftEditable(currentWorkflowStatus);
     }
 
     const currentDraft = mapDraftRowToCanonicalDraft(existingDraft ?? ({} as ExistingDraftRow));
+    // MVP direto: salvar gera a previa e deixa o documento pronto para aprovacao do cliente.
+    const workflowSubmission = buildWorkflowSubmissionPayload(currentWorkflowStatus, new Date());
 
     const draft = stripNullish(
-      mergeDefined<Record<string, unknown>>(currentDraft, input, prestador, {
-        workflowStatus,
-      }),
+      mergeDefined<Record<string, unknown>>(currentDraft, input, prestador, workflowSubmission),
     ) as RascunhoNfseCanonico;
 
     const draftPersistencePayload = buildDraftPersistencePayload(draft);
@@ -410,11 +474,80 @@ export class NfseRascunhoService {
 
     return {
       rascunhoId: rascunho.id,
-      workflowStatus,
+      workflowStatus: workflowSubmission.workflowStatus,
       draft,
       previewVersion: previa.versao,
       preview,
     };
+  }
+
+  async aprovarCliente(rascunhoId: string): Promise<RascunhoNfseResultado> {
+    const rascunho = await this.prisma.nfseRascunho.findUnique({
+      where: { id: rascunhoId },
+    });
+
+    if (!rascunho) {
+      throw new Error(`Rascunho NFSe nao encontrado: ${rascunhoId}.`);
+    }
+
+    const currentStatus = workflowStatusSchema.parse(rascunho.workflowStatus);
+    assertWorkflowTransition(currentStatus, "APROVADO_CLIENTE");
+
+    const agora = new Date();
+    await this.prisma.nfseRascunho.update({
+      where: { id: rascunhoId },
+      data: {
+        workflowStatus: "APROVADO_CLIENTE",
+        aprovadoClienteAt: agora,
+        rejeitadoAt: null,
+        observacaoValidacaoCliente: null,
+      },
+    });
+
+    const resultado = await this.buscar(rascunhoId);
+    if (!resultado) {
+      throw new Error(`Nao foi possivel carregar o rascunho atualizado: ${rascunhoId}.`);
+    }
+
+    return resultado;
+  }
+
+  async reprovarCliente(
+    rascunhoId: string,
+    observacaoValidacaoCliente: string,
+  ): Promise<RascunhoNfseResultado> {
+    const validacao = validacaoReprovacaoSchema.parse({
+      observacaoValidacaoCliente,
+    });
+
+    const rascunho = await this.prisma.nfseRascunho.findUnique({
+      where: { id: rascunhoId },
+    });
+
+    if (!rascunho) {
+      throw new Error(`Rascunho NFSe nao encontrado: ${rascunhoId}.`);
+    }
+
+    const currentStatus = workflowStatusSchema.parse(rascunho.workflowStatus);
+    assertWorkflowTransition(currentStatus, "REJEITADA");
+
+    const agora = new Date();
+    await this.prisma.nfseRascunho.update({
+      where: { id: rascunhoId },
+      data: {
+        workflowStatus: "REJEITADA",
+        rejeitadoAt: agora,
+        aprovadoClienteAt: null,
+        observacaoValidacaoCliente: validacao.observacaoValidacaoCliente,
+      },
+    });
+
+    const resultado = await this.buscar(rascunhoId);
+    if (!resultado) {
+      throw new Error(`Nao foi possivel carregar o rascunho atualizado: ${rascunhoId}.`);
+    }
+
+    return resultado;
   }
 
   async buscar(rascunhoId: string): Promise<RascunhoNfseResultado | null> {
@@ -489,4 +622,30 @@ export async function buscarRascunhoNfseAction(args: {
     : nfseRascunhoService;
 
   return service.buscar(args.rascunhoId);
+}
+
+export async function aprovarRascunhoNfseAction(args: {
+  rascunhoId: string;
+  prisma?: PrismaRascunhoNfseClient;
+}): Promise<RascunhoNfseResultado> {
+  const service = args.prisma
+    ? new NfseRascunhoService(args.prisma)
+    : nfseRascunhoService;
+
+  return service.aprovarCliente(args.rascunhoId);
+}
+
+export async function reprovarRascunhoNfseAction(args: {
+  rascunhoId: string;
+  observacaoValidacaoCliente: string;
+  prisma?: PrismaRascunhoNfseClient;
+}): Promise<RascunhoNfseResultado> {
+  const service = args.prisma
+    ? new NfseRascunhoService(args.prisma)
+    : nfseRascunhoService;
+
+  return service.reprovarCliente(
+    args.rascunhoId,
+    args.observacaoValidacaoCliente,
+  );
 }

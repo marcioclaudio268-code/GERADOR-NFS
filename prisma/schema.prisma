@@ -36,14 +36,15 @@ model NfseRascunho {
   updatedAt      DateTime           @updatedAt
 
   // Workflow markers. These are operational and filled by services, not by the draft form.
-  preValidadoAt         DateTime?
-  previaGeradaAt        DateTime?
-  aguardandoAprovacaoAt DateTime?
-  aprovadoClienteAt     DateTime?
-  enviadoEmissaoAt      DateTime?
-  autorizadoAt          DateTime?
-  rejeitadoAt           DateTime?
-  canceladoAt           DateTime?
+  preValidadoAt              DateTime?
+  previaGeradaAt             DateTime?
+  aguardandoAprovacaoAt      DateTime?
+  aprovadoClienteAt          DateTime?
+  enviadoEmissaoAt           DateTime?
+  autorizadoAt               DateTime?
+  rejeitadoAt                DateTime?
+  canceladoAt                DateTime?
+  observacaoValidacaoCliente String?
 
   // Operational controls from the portal; keep them flexible in MVP.
   tomadorLocalizacao       String?

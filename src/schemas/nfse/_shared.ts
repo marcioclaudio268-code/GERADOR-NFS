@@ -31,6 +31,10 @@ const normalizeBoolean = (value: unknown) => {
 
   const normalized = value.trim().toLowerCase();
 
+  if (normalized === "") {
+    return undefined;
+  }
+
   if (["true", "1", "sim", "s", "on", "yes"].includes(normalized)) {
     return true;
   }
