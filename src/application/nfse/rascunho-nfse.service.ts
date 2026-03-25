@@ -1,4 +1,3 @@
-import { PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
 import { assertNfseDraftEditable } from "../../domain/nfse/editability";
@@ -37,10 +36,33 @@ export type RascunhoNfseResultado = {
   preview: NfsePreviaNfse;
 };
 
-export type PrismaRascunhoNfseClient = Pick<
-  PrismaClient,
-  "nfseRascunho" | "nfsePrevia" | "$transaction"
->;
+export type PrismaRascunhoNfseClient = {
+  nfseRascunho: {
+    findUnique(args: { where: { id: string } }): Promise<Record<string, unknown> | null>;
+    create(args: { data: Record<string, unknown> }): Promise<Record<string, unknown>>;
+    update(args: {
+      where: { id: string };
+      data: Record<string, unknown>;
+    }): Promise<Record<string, unknown>>;
+    upsert(args: {
+      where: { id: string };
+      create: { id?: string } & Record<string, unknown>;
+      update: Record<string, unknown>;
+    }): Promise<Record<string, unknown>>;
+  };
+  nfsePrevia: {
+    findFirst(args: {
+      where?: { rascunhoId?: string };
+      orderBy?: { versao?: "asc" | "desc" };
+    }): Promise<Record<string, unknown> | null>;
+    create(args: { data: Record<string, unknown> }): Promise<Record<string, unknown>>;
+    aggregate(args: {
+      where?: { rascunhoId?: string };
+      _max?: { versao?: boolean };
+    }): Promise<{ _max: { versao: number | null } }>;
+  };
+  $transaction<T>(callback: (tx: PrismaRascunhoNfseClient) => Promise<T>): Promise<T>;
+};
 
 export type SalvarRascunhoNfseArgs = {
   rascunhoId?: string;
@@ -194,6 +216,11 @@ function buildPreviewSnapshot(
       prestadorEmail: draft.prestadorEmail,
       prestadorTelefone: draft.prestadorTelefone,
     },
+    rpsDps: {
+      numeroRps: draft.numeroRps,
+      serieRps: draft.serieRps,
+      dataEmissaoRps: draft.dataEmissaoRps,
+    },
     tomador: {
       tomadorDocumento: draft.tomadorDocumento,
       tomadorRazaoSocial: draft.tomadorRazaoSocial,
@@ -254,6 +281,12 @@ function buildPreviewSnapshot(
     },
     calculados,
   });
+}
+
+function omitPreviewOnlyFields(draft: RascunhoNfseCanonico): Record<string, unknown> {
+  const previewDraft = { ...draft } as Record<string, unknown>;
+  delete previewDraft.observacaoValidacaoCliente;
+  return previewDraft;
 }
 
 function mapDraftRowToCanonicalDraft(
@@ -331,6 +364,7 @@ function buildPreviewFromDraft(
   const valorDeducoes = asNumber(draft.valorDeducoes) ?? 0;
   const descontoIncondicionado = asNumber(draft.descontoIncondicionado) ?? 0;
   const descontoCondicionado = asNumber(draft.descontoCondicionado) ?? 0;
+  const previewDraft = omitPreviewOnlyFields(draft);
 
   // MVP conservador: calcula apenas a base simples visível ao cliente.
   // Nao tenta reproduzir regra fiscal municipal/provedor neste passo.
@@ -352,7 +386,7 @@ function buildPreviewFromDraft(
 
   const preview: NfsePreviaNfse = NfsePreviaCalculadaSchema.parse(
     stripNullish({
-      ...draft,
+      ...previewDraft,
       baseCalculo,
       aliquotaAplicada: aliquotaAplicada ?? undefined,
       valorIssqn,
@@ -566,7 +600,7 @@ export class NfseRascunhoService {
     const preview = latestPreview
       ? NfsePreviaCalculadaSchema.parse(
           stripNullish({
-            ...draft,
+            ...omitPreviewOnlyFields(draft),
             baseCalculo: latestPreview.baseCalculo ?? undefined,
             aliquotaAplicada: latestPreview.aliquotaAplicada ?? undefined,
             valorIssqn: latestPreview.valorIssqn ?? undefined,

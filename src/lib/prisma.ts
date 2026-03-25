@@ -1,17 +1,14 @@
-import { PrismaClient } from "@prisma/client";
+import type { PrismaRascunhoNfseClient } from "../application/nfse/rascunho-nfse.service";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __prisma: PrismaClient | undefined;
-}
+const unavailablePrisma = new Proxy(
+  {},
+  {
+    get() {
+      throw new Error(
+        "Prisma nao esta disponivel neste host local. Use o adapter de persistencia do MVP.",
+      );
+    },
+  },
+) as PrismaRascunhoNfseClient;
 
-export const prisma =
-  globalThis.__prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
-  });
-
-if (process.env.NODE_ENV !== "production") {
-  globalThis.__prisma = prisma;
-}
-
+export const prisma = unavailablePrisma;

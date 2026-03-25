@@ -5,10 +5,7 @@ import { canEditNfseDraft } from "../../domain/nfse/editability";
 import type { WorkflowStatus } from "../../domain/nfse/status";
 import { prestadorSnapshotSchema } from "../../schemas/nfse/_shared";
 import { NfsePreviaCalculadaSchema } from "../../schemas/nfse/previa-nfse.schema";
-import {
-  RascunhoNfseInputSchema,
-  type RascunhoNfseInput,
-} from "../../schemas/nfse/rascunho-nfse.schema";
+import type { RascunhoNfseInput } from "../../schemas/nfse/rascunho-nfse.schema";
 
 export type PrestadorNfseSnapshot = z.infer<typeof prestadorSnapshotSchema>;
 export type NfsePreviaNfse = z.infer<typeof NfsePreviaCalculadaSchema>;
@@ -36,7 +33,7 @@ export type NfseRascunhoActions = {
   buscarRascunho: (args: { rascunhoId: string }) => Promise<RascunhoNfseResultado | null>;
   salvarOuAtualizar: (args: {
     rascunhoId?: string;
-    input: RascunhoNfseInput;
+    input: unknown;
     prestador: PrestadorNfseSnapshot;
   }) => Promise<RascunhoNfseResultado>;
   aprovar: (args: { rascunhoId: string }) => Promise<RascunhoNfseResultado>;
@@ -191,9 +188,9 @@ function toFormValue(value: unknown): string {
   }
 
   if (value instanceof Date) {
-    const year = value.getFullYear();
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    const day = String(value.getDate()).padStart(2, "0");
+    const year = value.getUTCFullYear();
+    const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(value.getUTCDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
   }
 
@@ -230,16 +227,113 @@ function formatDateTime(value: unknown): string {
   }).format(value);
 }
 
-function formatPreviewValue(value: unknown): string {
+function formatPreviewValue(value: unknown, emptyText = "Pendente"): string {
   if (value === null || value === undefined || value === "") {
-    return "Pendente";
+    return emptyText;
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "Sim" : "Não";
   }
 
   if (typeof value === "number") {
     return PREVIEW_NUMBER_FORMAT.format(value);
   }
 
+  if (value instanceof Date) {
+    return formatDateTime(value);
+  }
+
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[objeto]";
+    }
+  }
+
   return String(value);
+}
+
+type PreviewField = {
+  label: string;
+  value: unknown;
+  note?: string;
+};
+
+type PreviewFieldGroup = {
+  title: string;
+  description?: string;
+  fields: PreviewField[];
+};
+
+const CAMPOS_AINDA_NAO_EXISTEM_NA_PREVIA: PreviewField[] = [
+  { label: "Número da NFS-e", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Série da NFS-e", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Chave de acesso da NFS-e", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Código de verificação", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Data/hora de emissão da NFS-e", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Data/hora de emissão da DPS", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Protocolo de autorização", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Data de autorização", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Link da DANFSe", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "Payload de retorno do provedor", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "JSON autorizado", value: undefined, note: "Pertence apenas à nota autorizada." },
+  { label: "XML autorizado", value: undefined, note: "Pertence apenas à nota autorizada." },
+];
+
+function getDraftFieldValue(draft: RascunhoNfseCanonico | null | undefined, key: string) {
+  if (!draft) {
+    return undefined;
+  }
+
+  return (draft as Record<string, unknown>)[key];
+}
+
+function renderDefinitionGrid(fields: PreviewField[], emptyText = "Pendente") {
+  return (
+    <dl
+      style={{
+        display: "grid",
+        gap: 8,
+        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+      }}
+    >
+      {fields.map((field) => (
+        <div key={field.label}>
+          <dt style={{ fontSize: 13, color: "#475569" }}>{field.label}</dt>
+          <dd style={{ margin: "0.15rem 0 0", fontWeight: 600 }}>
+            {formatPreviewValue(field.value, emptyText)}
+          </dd>
+          {field.note ? <small style={{ color: "#64748b" }}>{field.note}</small> : null}
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function renderPreviewFieldGroup(group: FieldGroup, draft: RascunhoNfseCanonico | null | undefined) {
+  const fields: PreviewField[] = group.fields.map((field) => ({
+    label: field.label,
+    value: getDraftFieldValue(draft, field.key),
+    note: field.required ? "Obrigatório no rascunho." : "Editável no rascunho.",
+  }));
+
+  return (
+    <section
+      key={group.title}
+      style={{
+        border: "1px solid #e2e8f0",
+        borderRadius: 8,
+        padding: 12,
+        background: "#f8fafc",
+      }}
+    >
+      <h4 style={{ marginTop: 0, marginBottom: 8 }}>{group.title}</h4>
+      {group.description ? <p style={{ marginTop: 0 }}>{group.description}</p> : null}
+      {renderDefinitionGrid(fields)}
+    </section>
+  );
 }
 
 function formatWorkflowStatus(status: string): string {
@@ -305,8 +399,9 @@ function renderField(
   return (
     <input
       {...commonProps}
-      type={field.kind === "date" ? "date" : field.kind === "email" ? "email" : field.kind === "tel" ? "tel" : "text"}
-      inputMode={field.kind === "decimal" ? "decimal" : undefined}
+      type={field.kind === "date" ? "text" : field.kind === "email" ? "email" : field.kind === "tel" ? "tel" : "text"}
+      placeholder={field.kind === "date" ? "YYYY-MM-DD" : undefined}
+      inputMode={field.kind === "decimal" ? "decimal" : field.kind === "date" ? "numeric" : undefined}
     />
   );
 }
@@ -342,6 +437,140 @@ function renderPreviewSection(resultado: RascunhoNfseResultado | null) {
           <dd>{formatPreviewValue(preview.valorTotalNfse)}</dd>
         </div>
       </dl>
+
+      <details>
+        <summary>Snapshot técnico da prévia</summary>
+        <pre style={{ whiteSpace: "pre-wrap", marginTop: 12 }}>
+          {JSON.stringify(preview.snapshotJson ?? null, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function renderPreviewSectionOperational(
+  resultado: RascunhoNfseResultado | null,
+  prestador: PrestadorNfseSnapshot,
+) {
+  const preview = resultado?.preview;
+  const draft = resultado?.draft;
+
+  if (!preview || !draft) {
+    return <p>Salve o rascunho para gerar a prévia operacional de conferência.</p>;
+  }
+
+  const camposCalculados: PreviewFieldGroup[] = [
+    {
+      title: "Cálculo principal",
+      description: "Valores derivados pelo sistema para conferência do cliente.",
+      fields: [
+        { label: "Base de cálculo", value: preview.baseCalculo },
+        { label: "Alíquota aplicada", value: preview.aliquotaAplicada },
+        { label: "Valor ISSQN", value: preview.valorIssqn },
+        { label: "Valor líquido da NFSe", value: preview.valorLiquidoNfse },
+        {
+          label: "Valor total da NFSe",
+          value: preview.valorTotalNfse,
+          note: "Permanece opcional no MVP até validação semântica final.",
+        },
+      ],
+    },
+    {
+      title: "Classificações derivadas",
+      description: "Campos de leitura que continuam sendo resultado da regra aplicada.",
+      fields: [
+        { label: "Situação tributária", value: preview.situacaoTributaria },
+        { label: "Situação PIS/COFINS/CSLL", value: preview.pisCofinsCsllSituacao },
+      ],
+    },
+    {
+      title: "Transparência tributária",
+      description: "Totais opcionais mantidos conservadores no MVP.",
+      fields: [
+        { label: "Total de tributos", value: preview.totalTributos },
+        { label: "Total de tributos federais", value: preview.totalTributosFederais },
+        { label: "Total de tributos estaduais", value: preview.totalTributosEstaduais },
+        { label: "Total de tributos municipais", value: preview.totalTributosMunicipais },
+        { label: "ISS valor imposto retido", value: preview.issValorImpostoRetido },
+        { label: "PIS débito apuração própria", value: preview.pisDebitoApuracaoPropria },
+        { label: "COFINS débito apuração própria", value: preview.cofinsDebitoApuracaoPropria },
+        { label: "IRRF retido na fonte", value: preview.irrfRetidoNaFonte },
+      ],
+    },
+  ];
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <section
+        style={{
+          display: "grid",
+          gap: 12,
+          border: "1px solid #dbeafe",
+          background: "#eff6ff",
+          padding: 12,
+          borderRadius: 8,
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Contexto da conferência</h3>
+        <p style={{ margin: 0 }}>
+          Esta visão mostra o que o cliente confere antes da autorização: dados fixos do
+          prestador, campos digitáveis do rascunho, cálculos derivados e campos que ainda não
+          existem porque pertencem apenas à nota autorizada.
+        </p>
+        <div style={{ fontSize: 14, color: "#1e3a8a" }}>
+          Workflow atual: <strong>{formatWorkflowStatus(resultado.workflowStatus)}</strong>
+        </div>
+      </section>
+
+      <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+        <h3 style={{ marginTop: 0 }}>Dados fixos do prestador</h3>
+        <p style={{ marginTop: 0, color: "#475569" }}>
+          Hidratação fora do input do rascunho. O cliente vê, mas não edita.
+        </p>
+        {renderPrestadorSnapshot(resultado, prestador)}
+      </section>
+
+      <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+        <h3 style={{ marginTop: 0 }}>Campos digitáveis do rascunho</h3>
+        <p style={{ marginTop: 0, color: "#475569" }}>
+          Estes são os dados que entram na conferência e podem ser ajustados pelo operador.
+        </p>
+        <div style={{ display: "grid", gap: 12 }}>
+          {DRAFT_FIELD_GROUPS.map((group) => renderPreviewFieldGroup(group, draft))}
+        </div>
+      </section>
+
+      <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+        <h3 style={{ marginTop: 0 }}>Campos calculados / derivados</h3>
+        <p style={{ marginTop: 0, color: "#475569" }}>
+          São exibidos para conferência, mas não entram no payload de entrada do rascunho.
+        </p>
+        <div style={{ display: "grid", gap: 12 }}>
+          {camposCalculados.map((group) => (
+            <section
+              key={group.title}
+              style={{
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+                padding: 12,
+                background: "#f8fafc",
+              }}
+            >
+              <h4 style={{ marginTop: 0, marginBottom: 8 }}>{group.title}</h4>
+              {group.description ? <p style={{ marginTop: 0 }}>{group.description}</p> : null}
+              {renderDefinitionGrid(group.fields)}
+            </section>
+          ))}
+        </div>
+      </section>
+
+      <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+        <h3 style={{ marginTop: 0 }}>Campos que ainda não existem na prévia</h3>
+        <p style={{ marginTop: 0, color: "#475569" }}>
+          Estes campos pertencem à nota autorizada e não aparecem na conferência do cliente.
+        </p>
+        {renderDefinitionGrid(CAMPOS_AINDA_NAO_EXISTEM_NA_PREVIA, "Não existe na prévia")}
+      </section>
 
       <details>
         <summary>Snapshot técnico da prévia</summary>
@@ -476,10 +705,9 @@ export function NfseRascunhoPage({
     setErro(null);
 
     try {
-      const parsed = RascunhoNfseInputSchema.parse(formState);
       const salvo = await actions.salvarOuAtualizar({
         rascunhoId: resultado?.rascunhoId,
-        input: parsed,
+        input: formState,
         prestador,
       });
 
@@ -620,7 +848,7 @@ export function NfseRascunhoPage({
 
         <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
           <h2 style={{ marginTop: 0 }}>Prévia para conferência</h2>
-          {renderPreviewSection(resultado)}
+          {renderPreviewSectionOperational(resultado, prestador)}
         </section>
 
         <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
