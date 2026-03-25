@@ -1,0 +1,211 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Canonical workflow states for NFSe.
+enum NfseWorkflowStatus {
+  RASCUNHO
+  PRE_VALIDACAO
+  PREVIA_GERADA
+  AGUARDANDO_APROVACAO_CLIENTE @map("AGUARDANDO_APROVACAO")
+  APROVADO_CLIENTE             @map("APROVADO")
+  EM_PROCESSAMENTO
+  AUTORIZADA                   @map("EMITIDO")
+  REJEITADA                    @map("REPROVADO")
+  CANCELADA                    @map("CANCELADO")
+}
+
+// Canonical authorization states for the emission layer.
+enum NfseStatusAutorizacao {
+  NAO_ENVIADA      @map("PENDENTE")
+  EM_PROCESSAMENTO
+  AUTORIZADA
+  REJEITADA
+  CANCELADA
+  ERRO_INTEGRACAO
+}
+
+model NfseRascunho {
+  id             String             @id @default(cuid())
+  workflowStatus NfseWorkflowStatus @default(RASCUNHO) @map("status")
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  // Workflow markers. These are operational and filled by services, not by the draft form.
+  preValidadoAt         DateTime?
+  previaGeradaAt        DateTime?
+  aguardandoAprovacaoAt DateTime?
+  aprovadoClienteAt     DateTime?
+  enviadoEmissaoAt      DateTime?
+  autorizadoAt          DateTime?
+  rejeitadoAt           DateTime?
+  canceladoAt           DateTime?
+
+  // Operational controls from the portal; keep them flexible in MVP.
+  tomadorLocalizacao       String?
+  intermediarioLocalizacao String?
+
+  // Prestador snapshot. Kept flat for persistence, but treated as hydrated data in the domain.
+  prestadorDocumento          String? @map("prestadorCnpjCpf")
+  prestadorRazaoSocial        String?
+  prestadorNomeFantasia       String?
+  prestadorInscricaoMunicipal String?
+  prestadorInscricaoEstadual  String?
+  prestadorEmail              String?
+  prestadorTelefone           String?
+  prestadorEndereco           String?
+  prestadorMunicipio          String?
+  prestadorUf                 String?
+  prestadorCep                String?
+
+  // Tomador.
+  tomadorDocumento          String? @map("tomadorCnpjCpf")
+  tomadorRazaoSocial        String?
+  tomadorNomeFantasia       String?
+  tomadorEmail              String?
+  tomadorTelefone           String?
+  tomadorInscricaoMunicipal String?
+  tomadorInscricaoEstadual  String?
+  tomadorEndereco           String?
+  tomadorMunicipio          String?
+  tomadorUf                 String?
+  tomadorCep                String?
+
+  // Intermediario.
+  intermediarioDocumento          String? @map("intermediarioCnpjCpf")
+  intermediarioRazaoSocial        String?
+  intermediarioInscricaoMunicipal String?
+  intermediarioEmail              String?
+  intermediarioTelefone           String?
+  intermediarioEndereco           String?
+  intermediarioMunicipio          String?
+  intermediarioUf                 String?
+  intermediarioCep                String?
+
+  // RPS / DPS.
+  numeroRps      String?
+  serieRps       String?
+  dataEmissaoRps DateTime?
+
+  // Service / base taxation.
+  // Canonical competence; legacy month/year fields remain for backward compatibility.
+  competencia               String?
+  competenciaMes            Int?
+  competenciaAno            Int?
+  dataPrestacaoServico      DateTime? @map("dataEmissao")
+  codigoServicoMunicipal    String?   @map("servicosPrestadosCodigo")
+  itemListaServico          String?
+  codigoCnae                String?
+  codigoNbs                 String?
+  descricaoServico          String?
+  observacoes               String?
+  informacoesComplementares String?
+
+  // Legacy compatibility mirrors for fields that the preview layer also recomputes.
+  situacaoTributaria    String?
+  pisCofinsCsllSituacao String?
+
+  // Entrada tributaria.
+  valorServicos                             Decimal? @map("valorServicoPrestado")
+  valorDeducoes                             Decimal?
+  descontoIncondicionado                    Decimal?
+  descontoCondicionado                      Decimal?
+  valorRetencaoPis                          Decimal?
+  valorRetencaoCofins                       Decimal?
+  valorRetencaoCsll                         Decimal?
+  irrfValorImposto                          Decimal?
+  inssCpIm                                  Decimal? @map("inssCpImpostoRetido")
+  contribuicoesSociaisRetidas               Decimal?
+  issRetido                                 Boolean?
+  issqnAliquota                             Decimal?
+  issqnCasoImunidadeExportacaoNaoIncidencia String?
+
+  // Tributacao municipal.
+  issqnTributacaoTipo             String?
+  regimeEspecialIssqn             String?
+  issExigibilidadeSuspensa        Boolean?
+  issRetencaoTomadorIntermediario Boolean?
+  beneficioMunicipal              Boolean?
+
+  // Local da prestacao.
+  paisPrestacao       String?
+  municipioPrestacao  String?
+  ufPrestacao         String?
+  municipioIncidencia String?
+  localServico        String?
+
+  previas NfsePrevia[]
+  emitida NfseEmitida?
+
+  @@map("nfse_rascunhos")
+}
+
+model NfsePrevia {
+  id         String   @id @default(cuid())
+  rascunhoId String
+  versao     Int      @default(1)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  rascunho NfseRascunho @relation(fields: [rascunhoId], references: [id])
+
+  // Calculated values stay here, away from the editable draft.
+  baseCalculo                 Decimal?
+  aliquotaAplicada            Decimal?
+  valorIssqn                  Decimal?
+  valorLiquidoNfse            Decimal?
+  // Optional until the final document rule is confirmed.
+  valorTotalNfse              Decimal?
+  situacaoTributaria          String?
+  pisCofinsCsllSituacao       String?
+  totalTributos               Decimal?
+  totalTributosFederais       Decimal?
+  totalTributosEstaduais      Decimal?
+  totalTributosMunicipais     Decimal?
+  issValorImpostoRetido       Decimal?
+  pisDebitoApuracaoPropria    Decimal?
+  cofinsDebitoApuracaoPropria Decimal?
+  irrfRetidoNaFonte           Decimal?
+
+  // Exact render snapshot shown to the client.
+  snapshotJson Json?
+
+  emitida NfseEmitida?
+
+  @@unique([rascunhoId, versao])
+  @@map("nfse_previas")
+}
+
+model NfseEmitida {
+  id                String                @id @default(cuid())
+  rascunhoId        String                @unique
+  previaId          String?               @unique
+  statusAutorizacao NfseStatusAutorizacao @default(NAO_ENVIADA)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  rascunho NfseRascunho @relation(fields: [rascunhoId], references: [id])
+  previa   NfsePrevia?  @relation(fields: [previaId], references: [id])
+
+  // Official identifiers exist only after authorization.
+  numeroNfse           String?
+  serieNfse            String?
+  chaveAcessoNfse      String?
+  codigoVerificacao    String?
+  dataHoraEmissaoNfse  DateTime?
+  dataHoraEmissaoDps   DateTime?
+  protocoloAutorizacao String?
+  dataAutorizacao      DateTime?
+  linkDanfse           String?
+
+  // Raw provider return for audit and replay.
+  payloadRetornoProvedor Json?
+  xmlAutorizado          String?
+  jsonAutorizado         Json?
+
+  @@map("nfse_emitidas")
+}
