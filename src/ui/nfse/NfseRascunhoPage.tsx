@@ -336,7 +336,19 @@ function renderPreviewFieldGroup(group: FieldGroup, draft: RascunhoNfseCanonico 
   );
 }
 
-function formatWorkflowStatus(status: string): string {
+function formatWorkflowStatus(status: string, modo: "operador" | "cliente" = "operador"): string {
+  if (status === "AGUARDANDO_APROVACAO_CLIENTE") {
+    return modo === "cliente" ? "Rascunho pronto para validação" : "Aguardando aprovação do cliente";
+  }
+
+  if (status === "APROVADO_CLIENTE") {
+    return modo === "cliente" ? "Rascunho aprovado" : "Aprovado pelo cliente";
+  }
+
+  if (status === "REJEITADA") {
+    return modo === "cliente" ? "Solicitação de ajuste enviada" : "Rejeitada";
+  }
+
   const map: Record<string, string> = {
     RASCUNHO: "Rascunho",
     PRE_VALIDACAO: "Pré-validação",
@@ -451,9 +463,11 @@ function renderPreviewSection(resultado: RascunhoNfseResultado | null) {
 function renderPreviewSectionOperational(
   resultado: RascunhoNfseResultado | null,
   prestador: PrestadorNfseSnapshot,
+  modo: "operador" | "cliente" = "operador",
 ) {
   const preview = resultado?.preview;
   const draft = resultado?.draft;
+  const modoCliente = modo === "cliente";
 
   if (!preview || !draft) {
     return <p>Salve o rascunho para gerar a prévia operacional de conferência.</p>;
@@ -518,11 +532,13 @@ function renderPreviewSectionOperational(
           existem porque pertencem apenas à nota autorizada.
         </p>
         <div style={{ fontSize: 14, color: "#1e3a8a" }}>
-          Workflow atual: <strong>{formatWorkflowStatus(resultado.workflowStatus)}</strong>
+          Workflow atual: <strong>{formatWorkflowStatus(resultado.workflowStatus, modo)}</strong>
         </div>
       </section>
 
-      <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+      {!modoCliente ? (
+        <>
+          <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
         <h3 style={{ marginTop: 0 }}>Dados fixos do prestador</h3>
         <p style={{ marginTop: 0, color: "#475569" }}>
           Hidratação fora do input do rascunho. O cliente vê, mas não edita.
@@ -578,6 +594,8 @@ function renderPreviewSectionOperational(
           {JSON.stringify(preview.snapshotJson ?? null, null, 2)}
         </pre>
       </details>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -624,7 +642,9 @@ export function NfseRascunhoPage({
   prestador,
   initialResultado = null,
   actions,
+  modo = "operador",
 }: NfseRascunhoPageProps) {
+  const modoCliente = modo === "cliente";
   const [resultado, setResultado] = useState<RascunhoNfseResultado | null>(initialResultado);
   const [formState, setFormState] = useState<DraftFormState>(
     buildFormStateFromResult(initialResultado),
@@ -698,6 +718,7 @@ export function NfseRascunhoPage({
   const statusAtual = resultado?.workflowStatus ?? "RASCUNHO";
   const podeEditar = canEditNfseDraft(statusAtual as Parameters<typeof canEditNfseDraft>[0]);
   const aguardandoAprovacao = statusAtual === "AGUARDANDO_APROVACAO_CLIENTE";
+  const aprovadoCliente = statusAtual === "APROVADO_CLIENTE";
   const reprovado = statusAtual === "REJEITADA";
 
   async function salvarDraft() {
@@ -819,7 +840,9 @@ export function NfseRascunhoPage({
         }}
         style={{ display: "grid", gap: 16 }}
       >
-        {DRAFT_FIELD_GROUPS.map((group) => (
+        {!modoCliente ? (
+          <>
+            {DRAFT_FIELD_GROUPS.map((group) => (
           <section key={group.title} style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
             <h2 style={{ marginTop: 0 }}>{group.title}</h2>
             {group.description ? <p>{group.description}</p> : null}
@@ -845,13 +868,16 @@ export function NfseRascunhoPage({
             </div>
           </section>
         ))}
+          </>
+        ) : null}
 
         <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
           <h2 style={{ marginTop: 0 }}>Prévia para conferência</h2>
-          {renderPreviewSectionOperational(resultado, prestador)}
+          {renderPreviewSectionOperational(resultado, prestador, modo)}
         </section>
 
-        <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+        {!modoCliente ? (
+          <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
           <h2 style={{ marginTop: 0 }}>Validação do cliente</h2>
           <p style={{ marginTop: 0 }}>
             {aguardandoAprovacao
@@ -892,6 +918,50 @@ export function NfseRascunhoPage({
             </div>
           </div>
         </section>
+        ) : null}
+
+        {modoCliente ? (
+          <section style={{ border: "1px solid #d1d5db", borderRadius: 8, padding: 16, background: "#fff" }}>
+            <h2 style={{ marginTop: 0 }}>Decisão do cliente</h2>
+            <p style={{ marginTop: 0 }}>
+              {aguardandoAprovacao
+                ? "Rascunho pronto para validação."
+                : aprovadoCliente
+                  ? "Rascunho aprovado."
+                  : statusAtual === "REJEITADA"
+                    ? "Solicitação de ajuste enviada ao escritório."
+                    : "Este rascunho ainda não está pronto para validação."}
+            </p>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span>Observação para ajuste</span>
+                <textarea
+                  rows={4}
+                  value={reprovacaoObservacao}
+                  onChange={(event) => setReprovacaoObservacao(event.target.value)}
+                  disabled={!aguardandoAprovacao}
+                  style={{
+                    width: "100%",
+                    padding: "0.65rem 0.75rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: aguardandoAprovacao ? "#ffffff" : "#f8fafc",
+                  }}
+                />
+              </label>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => void aprovarCliente()} disabled={salvando || !aguardandoAprovacao}>
+                  Aprovar
+                </button>
+                <button type="button" onClick={() => void reprovarCliente()} disabled={salvando || !aguardandoAprovacao}>
+                  Solicitar ajuste
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : null}
       </form>
     </div>
   );

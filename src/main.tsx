@@ -192,12 +192,16 @@ const actions = createApiActions();
 function App() {
   const pathname = usePathname();
   const rascunhoId = useMemo(() => resolveRascunhoId(pathname), [pathname]);
+  const viewMode = new URLSearchParams(window.location.search).get("modo") === "cliente"
+    ? "cliente"
+    : "operador";
 
   return (
     <NfseRascunhoPage
       rascunhoId={rascunhoId}
       prestador={DEMO_PRESTADOR}
       actions={actions}
+      modo={viewMode}
     />
   );
 }
